@@ -1,64 +1,82 @@
-import { AssemblyAI } from "assemblyai";
+// Start by making sure the `assemblyai` and `node-record-lpcm16` package is
+// installed. If not, you can install it by running the following command:
+// npm install assemblyai
+// npm install node-record-lpcm16
+// npm install --save-dev @types/node-record-lpcm16 (if using TypeScript)
+//
+// You should also have `sox` installed on your system. If not, run:
+// brew install sox (macOS)
+// sudo apt-get install sox libsox-fmt-all (Linux)
 
-const apiKey = process.env.ASSEMBLY_AI_API_KEY;
+// @ts-nocheck
 
-if (!apiKey) {
-  throw new Error('API key is not defined');
+import { AssemblyAI, RealtimeTranscript } from 'assemblyai'
+import recorder from 'node-record-lpcm16'
+
+if (!process.env.ASSEMBLY_API_KEY) {
+    throw new Error('ASSEMBLY_API_KEY environment variable is required')
+  }
+  
+  const client = new AssemblyAI({
+    apiKey: process.env.ASSEMBLY_API_KEY
+  })
+
+const transcriber = client.realtime.transcriber({
+  sampleRate: 16_000,
+})
+
+const run = async () => {
+  transcriber.on('open', ({ sessionId }) => {
+    console.log(`Session opened with ID: ${sessionId}`)
+  })
+
+  transcriber.on('error', (error: Error) => {
+    console.error('Error:', error)
+  })
+
+  transcriber.on('close', (code: number, reason: string) =>
+    console.log('Session closed:', code, reason)
+  )
+
+  transcriber.on('transcript', (transcript: RealtimeTranscript) => {
+    console.log('Received:', transcript)
+
+    if (!transcript.text) return
+
+    if (transcript.message_type == 'FinalTranscript') {
+      console.log('Final:', transcript.text)
+    } else {
+      console.log('Partial:', transcript.text)
+    }
+  })
+
+  console.log('Connecting to real-time transcript service')
+  await transcriber.connect()
+
+  console.log('Starting recording')
+  console.log('If you want to stop recording, press Ctrl/CMD+C')
+
+  const recording = recorder.record({
+    channels: 1,
+    sampleRate: 16_000,
+    audioType: 'wav', // Linear PCM
+  })
+
+  recording.stream().on('data', (buffer: Buffer) => {
+    transcriber.sendAudio(buffer)
+  })
+
+  process.on('SIGINT', async function () {
+    console.log()
+    console.log('Stopping recording')
+    recording.stop()
+
+    console.log('Closing real-time transcript connection')
+    await transcriber.close()
+
+    process.exit()
+  })
 }
 
-const client = new AssemblyAI({
-  apiKey: apiKey,
-});
-
-export async function POST(request: Request) {
-  try {
-    const { audioUrl, prompt } = await request.json();
-
-    // Ensure audioUrl is defined and is a string
-    if (typeof audioUrl !== 'string') {
-      return Response.json(
-        { success: false, error: 'Invalid audio URL' },
-        { status: 400 }
-      );
-    }
-
-    // Transcribe the audio
-    const transcript = await client.transcripts.transcribe({ 
-      audio: audioUrl,
-      language_detection: true
-    });
-
-    // Poll for completion
-    let result;
-    do {
-      result = await client.transcripts.get(transcript.id);
-      if (result.status !== 'completed') {
-        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second before polling again
-      }
-    } while (result.status !== 'completed' && result.status !== 'error');
-
-    if (result.status === 'error') {
-      throw new Error('Transcription failed');
-    }
-
-    // Get the summary using Lemur after transcription is complete
-    const { response } = await client.lemur.task({
-      transcript_ids: [transcript.id],
-      prompt: prompt || 'Provide a brief summary of the transcript.',
-      final_model: 'anthropic/claude-3-5-sonnet'
-    });
-
-    return Response.json({ 
-      success: true, 
-      transcription: result.text,
-      summary: response 
-    });
-
-  } catch (error) {
-    console.error('Transcription error:', error);
-    return Response.json(
-      { success: false, error: 'Failed to process audio' },
-      { status: 500 }
-    );
-  }
-} 
+run()
+    

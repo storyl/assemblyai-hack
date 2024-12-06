@@ -1,98 +1,107 @@
-'use client';
+'use client'
 
-import { useState } from 'react';
-import { useReactMediaRecorder } from 'react-media-recorder';
+import React, { useState, useEffect } from 'react';
+import { Mic, MicOff, Loader2 } from 'lucide-react';
 
-export default function AudioRecorder() {
-  const [transcription, setTranscription] = useState<string>('');
-  const [isLoading, setIsLoading] = useState(false);
+const AudioRecorder = () => {
+  const [isRecording, setIsRecording] = useState(false);
+  const [transcript, setTranscript] = useState('');
+  const [partialTranscript, setPartialTranscript] = useState('');
+  const [error, setError] = useState('');
+  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
 
-  const { status, startRecording, stopRecording, mediaBlobUrl } =
-    useReactMediaRecorder({
-      audio: true,
-      blobPropertyBag: { type: 'audio/wav' },
-    });
-
-  const handleTranscribe = async () => {
-    if (!mediaBlobUrl) return;
-
+  const startRecording = async () => {
     try {
-      setIsLoading(true);
-      
-      // Convert the blob URL to a File object
-      const response = await fetch(mediaBlobUrl);
-      const blob = await response.blob();
-      
-      // Create a FormData object to send the file
-      const formData = new FormData();
-      formData.append('audio', blob, 'recording.wav');
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      setMediaRecorder(recorder);
 
-      // Upload to AssemblyAI
-      const result = await fetch('/api/transcribe', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          audioUrl: mediaBlobUrl,
-          prompt: 'Summarize the main points of this conversation',
-        }),
-      });
+      // Create WebSocket connection
+      const ws = new WebSocket('wss://api.assemblyai.com/v2/realtime/ws?sample_rate=16000');
 
-      const data = await result.json();
-      
-      if (data.success) {
-        setTranscription(`Full Transcription:\n${data.transcription}\n\nSummary:\n${data.summary}`);
-      } else {
-        console.error('Transcription failed:', data.error);
-        setTranscription('Error transcribing audio');
-      }
-    } catch (error) {
-      console.error('Error:', error);
-      setTranscription('Error transcribing audio');
-    } finally {
-      setIsLoading(false);
+      ws.onopen = () => {
+        ws.send(JSON.stringify({
+          audio_data: '',
+          sample_rate: 16000,
+          raw: true
+        }));
+      };
+
+      ws.onmessage = (message) => {
+        const result = JSON.parse(message.data);
+        if (result.message_type === 'FinalTranscript') {
+          setTranscript(prev => prev + ' ' + result.text);
+          setPartialTranscript('');
+        } else {
+          setPartialTranscript(result.text);
+        }
+      };
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0 && ws.readyState === 1) {
+          const reader = new FileReader();
+          reader.onload = () => {
+            if (ws.readyState === 1) {
+              ws.send(JSON.stringify({
+                audio_data: typeof reader.result === 'string' ? reader.result.split(',')[1] : ''
+              }));
+            }
+          };
+          reader.readAsDataURL(event.data);
+        }
+      };
+
+      recorder.start(250);
+      setIsRecording(true);
+      setError('');
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      setError('Error accessing microphone: ' + errorMessage);
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorder) {
+      mediaRecorder.stop();
+      mediaRecorder.stream.getTracks().forEach(track => track.stop());
+      setIsRecording(false);
     }
   };
 
   return (
-    <div className="flex flex-col items-center gap-4 p-4">
-      <div className="flex gap-4">
+    <div className="w-full max-w-2xl mx-auto p-6 space-y-4">
+      <div className="flex justify-center">
         <button
-          onClick={startRecording}
-          disabled={status === 'recording'}
-          className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 disabled:bg-gray-400"
+          onClick={isRecording ? stopRecording : startRecording}
+          className={`p-4 rounded-full ${
+            isRecording 
+              ? 'bg-red-500 hover:bg-red-600' 
+              : 'bg-blue-500 hover:bg-blue-600'
+          } text-white`}
         >
-          Start Recording
+          {isRecording ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
         </button>
-        <button
-          onClick={stopRecording}
-          disabled={status !== 'recording'}
-          className="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600 disabled:bg-gray-400"
-        >
-          Stop Recording
-        </button>
-        {mediaBlobUrl && (
-          <button
-            onClick={handleTranscribe}
-            disabled={isLoading}
-            className="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 disabled:bg-gray-400"
-          >
-            {isLoading ? 'Transcribing...' : 'Transcribe'}
-          </button>
-        )}
       </div>
 
-      {mediaBlobUrl && (
-        <audio src={mediaBlobUrl} controls className="mt-4" />
-      )}
-
-      {transcription && (
-        <div className="mt-4 p-4 bg-gray-100 rounded-md max-w-2xl w-full">
-          <h3 className="font-bold mb-2">Transcription:</h3>
-          <p>{transcription}</p>
+      {error && (
+        <div className="p-4 bg-red-100 text-red-700 rounded">
+          {error}
         </div>
       )}
+
+      <div className="space-y-2">
+        <div className="p-4 bg-gray-100 rounded min-h-32">
+          <p className="font-medium">Transcript:</p>
+          <p>{transcript}</p>
+          {isRecording && (
+            <p className="text-gray-500 italic">
+              {partialTranscript || <Loader2 className="w-4 h-4 animate-spin" />}
+            </p>
+          )}
+        </div>
+      </div>
     </div>
   );
-} 
+};
+
+export default AudioRecorder;
