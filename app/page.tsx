@@ -6,17 +6,20 @@ import { transcribeAudio } from '../utils/transcribe';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { LipSyncCharacter } from '@/components/LipSyncCharacter';
+import { Volume2 } from 'lucide-react';
 
 export default function VoiceRecorderTranscriber() {
   const { isRecording, audioBlob, startRecording, stopRecording } = useAudioRecorder();
-  const [transcription, setTranscription] = useState<string>('');
+  const [transcription, setTranscription] = useState('');
   const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
 
   const handleTranscribe = async () => {
     if (audioBlob) {
       setIsTranscribing(true);
       try {
         const text = await transcribeAudio(audioBlob);
+        console.log('Transcription received:', text); // Debug log
         setTranscription(text);
       } catch (error) {
         console.error('Transcription error:', error);
@@ -40,42 +43,81 @@ export default function VoiceRecorderTranscriber() {
     }
   };
 
+  const speakText = () => {
+    if (!isSpeaking && transcription) {
+      setIsSpeaking(true);
+      const utterance = new SpeechSynthesisUtterance(transcription);
+      
+      utterance.onend = () => {
+        setIsSpeaking(false);
+      };
+
+      utterance.onerror = () => {
+        setIsSpeaking(false);
+      };
+
+      window.speechSynthesis.speak(utterance);
+    } else if (isSpeaking) {
+      window.speechSynthesis.cancel();
+      setIsSpeaking(false);
+    }
+  };
+
   return (
-    <div className="container mx-auto p-4 ">
+    <div className="container mx-auto p-4">
       <Card className="w-full max-w-md mx-auto outline-none border-none shadow-none">
         <CardHeader>
-          <CardTitle className='text-center text-4xl font-bold'>Voice to Lip Sync</CardTitle>
+          <CardTitle className="text-center text-4xl font-bold">Voice to Lip Sync</CardTitle>
         </CardHeader>
         <CardContent>
           <LipSyncCharacter text={transcription} />
-          <div className="flex space-x-4 flex-row items-center mt-4 ">
+          <div className="flex space-x-4 flex-row items-center mt-4">
             <Button 
               onClick={isRecording ? stopRecording : startRecording}
               variant={isRecording ? "destructive" : "default"}
-              className='bg-black text-white rounded hover:bg-black/90'
+              className="bg-black text-white rounded hover:bg-black/90"
             >
               {isRecording ? 'Stop Recording' : 'Start Recording'}
             </Button>
             {audioBlob && (
               <>
-                <Button className='bg-black text-white rounded hover:bg-black/90' onClick={handleDownload}>Download Recording</Button>
-                <Button className='bg-black text-white rounded hover:bg-black/90' onClick={handleTranscribe} disabled={isTranscribing}>
+                <Button className="bg-black text-white rounded hover:bg-black/90" onClick={handleDownload}>
+                  Download Recording
+                </Button>
+                <Button 
+                  className="bg-black text-white rounded hover:bg-black/90" 
+                  onClick={handleTranscribe} 
+                  disabled={isTranscribing}
+                >
                   {isTranscribing ? 'Transcribing...' : 'Transcribe'}
                 </Button>
               </>
             )}
           </div>
         </CardContent>
-        <CardFooter>
-          {transcription && (
-            <div className="mt-4">
-              <h3 className="text-lg font-semibold">Transcription:</h3>
-              <p>{transcription}</p>
+        {transcription && (
+          <CardFooter className="flex flex-col items-start w-full">
+            <div className="mt-4 w-full">
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-semibold">Transcription:</h3>
+                <Button
+                  onClick={speakText}
+                  variant="ghost"
+                  size="sm"
+                  className="ml-2"
+                >
+                  <Volume2 
+                    className={`h-10 w-10 ${isSpeaking ? 'text-blue-500' : 'text-black'}`}
+                  />
+                </Button>
+              </div>
+              <div className="mt-2 p-4  rounded-lg">
+                {transcription}
+              </div>
             </div>
-          )}
-        </CardFooter>
+          </CardFooter>
+        )}
       </Card>
     </div>
   );
 }
-
